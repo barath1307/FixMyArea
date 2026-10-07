@@ -431,7 +431,7 @@ function App() {
       <Routes>
 
         <Route path="/" element={<Home />} />
-
+<Route path="/my-reports" element={<MyReports />} />
         <Route
           path="/report"
           element={<ReportIssue />}
@@ -447,10 +447,6 @@ function App() {
           element={<MapPage />}
         />
 
-        <Route
-          path="/my-reports"
-          element={<MyReports />}
-        />
 
       </Routes>
 
