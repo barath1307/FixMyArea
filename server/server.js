@@ -2,7 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const path = require("path");
-const fs = require("fs/promises");
+const fs = require("fs");
+const fsp = require("fs/promises");
 
 require("dotenv").config();
 
@@ -18,18 +19,31 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+// ================= UPLOAD DIRECTORY =================
+
+// Always create uploads folder if it doesn't exist
+const uploadDir = path.join(__dirname, "uploads");
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 // ================= MIDDLEWARE =================
 
-app.use(cors());
-app.use(express.json());
+app.use(
+  cors({
+    origin: true,
+    methods: ["GET", "POST", "OPTIONS"],
+  })
+);
 
+app.use(express.json());
 
 // ================= IMAGE UPLOAD =================
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/");
+    cb(null, uploadDir);
   },
 
   filename: (req, file, cb) => {
@@ -69,7 +83,6 @@ const upload = multer({
   },
 });
 
-
 // ================= BASIC ROUTES =================
 
 app.get("/", (req, res) => {
@@ -79,7 +92,6 @@ app.get("/", (req, res) => {
   });
 });
 
-
 app.get("/api/test", (req, res) => {
   res.json({
     success: true,
@@ -87,6 +99,13 @@ app.get("/api/test", (req, res) => {
   });
 });
 
+// Health check for Render
+app.get("/healthz", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "FixMyArea backend is healthy",
+  });
+});
 
 // ================= AI IMAGE ANALYSIS =================
 
@@ -94,9 +113,9 @@ app.post(
   "/api/upload",
   upload.single("image"),
   async (req, res) => {
+    let uploadedFilePath = null;
 
     try {
-
       if (!req.file) {
         return res.status(400).json({
           success: false,
@@ -104,31 +123,33 @@ app.post(
         });
       }
 
+      uploadedFilePath = req.file.path;
 
-      // Read uploaded image
-      const imageBuffer = await fs.readFile(
-        req.file.path
+      // ================= READ IMAGE =================
+
+      const imageBuffer = await fsp.readFile(
+        uploadedFilePath
       );
 
       const base64Image =
         imageBuffer.toString("base64");
 
+      // ================= GEMINI AI =================
 
-      // Send image to Gemini
-      const response = await ai.models.generateContent({
+      const response =
+        await ai.models.generateContent({
+          model: "gemini-3.5-flash-lite",
 
-        model: "gemini-3.5-flash-lite",
-
-        contents: [
-          {
-            inlineData: {
-              mimeType: req.file.mimetype,
-              data: base64Image,
+          contents: [
+            {
+              inlineData: {
+                mimeType: req.file.mimetype,
+                data: base64Image,
+              },
             },
-          },
 
-          {
-            text: `
+            {
+              text: `
 You are the AI vision system for FixMyArea,
 a civic issue reporting platform.
 
@@ -170,66 +191,57 @@ Rules:
 - Do not invent information.
 - If there is no obvious civic issue, use "Other".
 - Keep the description short and useful.
-            `,
-          },
-        ],
-
-        config: {
-          responseMimeType: "application/json",
-
-          responseSchema: {
-            type: "object",
-
-            properties: {
-              issueType: {
-                type: "string",
-              },
-
-              severity: {
-                type: "string",
-              },
-
-              confidence: {
-                type: "number",
-              },
-
-              description: {
-                type: "string",
-              },
+              `,
             },
+          ],
 
-            required: [
-              "issueType",
-              "severity",
-              "confidence",
-              "description",
-            ],
+          config: {
+            responseMimeType: "application/json",
+
+            responseSchema: {
+              type: "object",
+
+              properties: {
+                issueType: {
+                  type: "string",
+                },
+
+                severity: {
+                  type: "string",
+                },
+
+                confidence: {
+                  type: "number",
+                },
+
+                description: {
+                  type: "string",
+                },
+              },
+
+              required: [
+                "issueType",
+                "severity",
+                "confidence",
+                "description",
+              ],
+            },
           },
-        },
+        });
 
-      });
+      // ================= PARSE GEMINI RESPONSE =================
 
-
-      // Gemini response
       const aiText = response.text.trim();
 
       const analysis = JSON.parse(aiText);
 
+      // ================= SEND RESULT =================
 
-      // Send result to frontend
       res.json({
-
         success: true,
 
         message:
           "Image uploaded and analyzed successfully",
-
-        file: {
-          originalName: req.file.originalname,
-          filename: req.file.filename,
-          size: req.file.size,
-          path: req.file.path,
-        },
 
         analysis: {
           issueType: analysis.issueType,
@@ -237,18 +249,14 @@ Rules:
           confidence: `${analysis.confidence}%`,
           description: analysis.description,
         },
-
       });
-
     } catch (error) {
-
       console.error(
         "Gemini AI analysis error:",
         error
       );
 
       res.status(500).json({
-
         success: false,
 
         message:
@@ -256,19 +264,26 @@ Rules:
 
         error:
           error.message || "Unknown error",
-
       });
-
+    } finally {
+      // Remove temporary uploaded image after analysis
+      if (uploadedFilePath) {
+        try {
+          await fsp.unlink(uploadedFilePath);
+        } catch (deleteError) {
+          console.error(
+            "Could not delete temporary image:",
+            deleteError.message
+          );
+        }
+      }
     }
-
   }
 );
-
 
 // ================= ERROR HANDLER =================
 
 app.use((error, req, res, next) => {
-
   console.error(error);
 
   res.status(400).json({
@@ -277,16 +292,12 @@ app.use((error, req, res, next) => {
       error.message ||
       "Something went wrong",
   });
-
 });
-
 
 // ================= SERVER =================
 
 app.listen(PORT, () => {
-
   console.log(
-    `🚀 FixMyArea server running on http://localhost:${PORT}`
+    `🚀 FixMyArea server running on port ${PORT}`
   );
-
 });
