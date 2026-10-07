@@ -118,7 +118,7 @@ function ReportIssue() {
     formData.append("image", imageFile);
 
     const response = await fetch(
-      "http://localhost:5000/api/upload",
+      "https://fixmyarea-backend-kre4.onrender.com/api/upload",
       {
         method: "POST",
         body: formData,
